@@ -1,0 +1,89 @@
+name: Update keys.json
+
+on:
+  workflow_dispatch:
+    inputs:
+      key:
+        description: 'Key string'
+        required: true
+        type: string
+      type:
+        description: 'Key type (1day, 7day, 30day, lifetime)'
+        required: true
+        type: string
+      expires:
+        description: 'Unix timestamp expiry (-1 for lifetime)'
+        required: true
+        type: string
+      note:
+        description: 'Note/username'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  update-keys:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Read current keys.json
+        id: read_keys
+        run: |
+          if [ -f keys.json ]; then
+            cat keys.json
+          else
+            echo '{"keys":[]}'
+          fi
+
+      - name: Add new key
+        id: add_key
+        run: |
+          KEY="${{ github.event.inputs.key }}"
+          TYPE="${{ github.event.inputs.type }}"
+          EXPIRES="${{ github.event.inputs.expires }}"
+          NOTE="${{ github.event.inputs.note }}"
+          
+          if [ -f keys.json ]; then
+            EXISTING=$(cat keys.json)
+          else
+            EXISTING='{"keys":[]}'
+          fi
+          
+          if echo "$EXISTING" | grep -q "\"key\": \"$KEY\""; then
+            echo "duplicate=true" >> $GITHUB_OUTPUT
+            echo "keys=$EXISTING" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          NEW_KEY=$(jq -n --arg k "$KEY" --arg t "$TYPE" --argjson e "$EXPIRES" --arg n "$NOTE" \
+            '{key: $k, type: $t, expires: $e, note: $n}')
+          
+          UPDATED=$(echo "$EXISTING" | jq --argjson nk "$NEW_KEY" '.keys += [$nk]')
+          echo "$UPDATED" > keys.json
+          echo "duplicate=false" >> $GITHUB_OUTPUT
+          echo "keys=$UPDATED" >> $GITHUB_OUTPUT
+
+      - name: Commit & Push
+        if: steps.add_key.outputs.duplicate == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add keys.json
+          git commit -m "Add key: ${{ github.event.inputs.key }}"
+          git push
+
+      - name: Result
+        run: |
+          if [ "${{ steps.add_key.outputs.duplicate }}" = "true" ]; then
+            echo "❌ Key already exists"
+            exit 1
+          else
+            echo "✅ Key added successfully"
+          fi
